@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  gopay-gateway:
+    build: .
+    container_name: gopay-gateway
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
