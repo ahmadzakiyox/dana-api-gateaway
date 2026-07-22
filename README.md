@@ -271,7 +271,7 @@ Proyek ini dibuat untuk membantu mempermudah proses pembayaran untuk teman-teman
 **Silakan scan QRIS di bawah ini untuk berdonasi:**
 
 <p align="center">
-  <img src="qris-donasi.png" alt="QRIS Donasi" width="300"/>
+  <img src="https://github.com/ahmadzakiyox/DB/blob/a3aa4e5fb31e5f6f66b686b8629b233d440b717a/6269360055874426106_121.jpg?raw=true" alt="QRIS Donasi" width="300"/>
 </p>
 
 💡 **Punya ide fitur baru, pertanyaan, atau butuh bantuan integrasi?** 
