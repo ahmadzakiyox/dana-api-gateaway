@@ -207,6 +207,105 @@ async function autoLoginGojek() {
     }
 }
 
+app.post('/auth/request-otp', autentikasiApiKey, async (permintaan, respon) => {
+    const phone = permintaan.body.phone_number || permintaan.body.phone || process.env.GOPAY_PHONE;
+    if (!phone) {
+        return respon.status(400).json({ success: false, message: 'Wajib menyediakan nomor HP (phone_number)' });
+    }
+
+    try {
+        catatLogAktivitas('INFO', `Meminta kode OTP GoJek untuk nomor: ${phone}`);
+        const responRequest = await axios.post('https://api.gobiz.co.id/goid/login/request', {
+            phone_number: phone,
+            login_type: 'otp',
+            client_id: 'go-biz-web-new'
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authentication-Type': 'go-id',
+                'X-User-Type': 'merchant',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+                'Origin': 'https://portal.gofoodmerchant.co.id',
+                'Referer': 'https://portal.gofoodmerchant.co.id/'
+            },
+            timeout: 10000
+        });
+
+        const dataRespon = responRequest.data;
+        const otpToken = dataRespon.otp_token || dataRespon.data?.otp_token || dataRespon.login_token;
+
+        catatLogAktivitas('SUCCESS', `Kode OTP telah dikirim ke nomor HP ${phone}`);
+        respon.json({
+            success: true,
+            message: `Kode OTP berhasil dikirim ke nomor ${phone}`,
+            data: {
+                otp_token: otpToken || 'sent',
+                phone_number: phone
+            }
+        });
+    } catch (error) {
+        const detailGagal = error.response ? JSON.stringify(error.response.data) : error.message;
+        catatLogAktivitas('ERROR', `Gagal meminta OTP: ${detailGagal}`);
+        respon.status(500).json({ success: false, message: 'Gagal Meminta Kode OTP GoJek', error: detailGagal });
+    }
+});
+
+app.post('/auth/verify-otp', autentikasiApiKey, async (permintaan, respon) => {
+    const { otp, otp_token } = permintaan.body;
+    if (!otp) {
+        return respon.status(400).json({ success: false, message: 'Wajib menyediakan kode OTP (otp)' });
+    }
+
+    try {
+        catatLogAktivitas('INFO', `Memverifikasi kode OTP...`);
+        const responToken = await axios.post('https://api.gobiz.co.id/goid/token', {
+            client_id: 'go-biz-web-new',
+            grant_type: 'otp',
+            data: {
+                otp: otp,
+                otp_token: otp_token || ''
+            }
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authentication-Type': 'go-id',
+                'X-User-Type': 'merchant',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+                'Origin': 'https://portal.gofoodmerchant.co.id',
+                'Referer': 'https://portal.gofoodmerchant.co.id/'
+            },
+            timeout: 10000
+        });
+
+        const dataToken = responToken.data;
+        const accessToken = dataToken.access_token || dataToken.data?.access_token;
+        const refreshToken = dataToken.refresh_token || dataToken.data?.refresh_token;
+
+        if (accessToken) {
+            const cookieBaru = `access_token=${accessToken}; refresh_token=${refreshToken || ''}; auth_method=goid`;
+            process.env.GOPAY_COOKIE = cookieBaru;
+            saveCookieToFile(cookieBaru);
+            catatLogAktivitas('SUCCESS', `Verifikasi OTP Berhasil! Token baru disimpan ke file .gopay_cache.json.`);
+
+            respon.json({
+                success: true,
+                message: 'Verifikasi OTP Berhasil! Token Baru Aktif & Tersimpan di .gopay_cache.json',
+                data: {
+                    access_token: accessToken,
+                    refresh_token: refreshToken,
+                    cookie: cookieBaru
+                }
+            });
+        } else {
+            respon.status(400).json({ success: false, message: 'Verifikasi Gagal: Token Tidak Ditemukan dalam Respon Server' });
+        }
+    } catch (error) {
+        const detailGagal = error.response ? JSON.stringify(error.response.data) : error.message;
+        catatLogAktivitas('ERROR', `Gagal Verifikasi OTP: ${detailGagal}`);
+        respon.status(500).json({ success: false, message: 'Gagal Memverifikasi OTP GoJek', error: detailGagal });
+    }
+});
+
 app.get('/token-status', autentikasiApiKey, async (permintaan, respon) => {
     const teksCookieAktif = loadCookieFromFile() || process.env.GOPAY_COOKIE;
     if (!teksCookieAktif) {
