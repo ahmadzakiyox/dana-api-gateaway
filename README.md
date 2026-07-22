@@ -206,22 +206,7 @@ docker-compose up -d --build
 docker-compose logs -f
 ```
 
----
 
-### METODE C: Deploy Gratis di Cloud (Render / Railway / Vercel)
-
-#### Deploy di Render.com:
-1. Buat **Web Service** baru di dashboard Render.com dan hubungkan repo GitHub ini.
-2. Set **Build Command**: `npm install`
-3. Set **Start Command**: `node server.js`
-4. Buka menu **Environment Variables** dan tambahkan:
-   - `PORT`: `3000`
-   - `API_KEY`: `supersecretkey123`
-   - `GOPAY_MERCHANT_ID`: `G020877062`
-   - `GOPAY_COOKIE`: `isi_cookie_browser_anda`
-   - `QRIS_STATIC`: `isi_qris_statis_toko_anda`
-
----
 
 ## 💻 Panduan Integrasi ke Website Toko Utama
 
@@ -273,6 +258,6 @@ async function prosesPembayaranCheckout(nominalTagihan) {
 | Status Error | Penyebab | Solusi |
 | :--- | :--- | :--- |
 | `401 Unauthorized: Invalid API Key` | API Key yang dikirim tidak sesuai dengan `API_KEY` di `.env`. | Periksa kembali header `X-API-Key` atau query param `?api_key=`. |
-| `401 Unauthorized (GoJek API)` | Cookie / Token GoPay telah kedaluwarsa atau di-*force logout*. | Ambil Cookie baru dari F12 browser dan kirim ke `POST /update-token`. |
+| `401 Unauthorized (GoJek API)` | Cookie / Token GoPay telah kedaluwarsa atau di-*force logout*. | Gateway akan otomatis melakukan login ulang dari Email & Password di `.env`. Jika masih gagal, pastikan `GOPAY_EMAIL` dan `GOPAY_PASSWORD` benar. |
 | `410 Gone (QR expired)` | Link gambar QR Code telah melewati batas waktu 5 menit. | Buat QRIS baru via `POST /create-qris`. |
 | `paid: false` | Pembayaran belum masuk atau transaksi sudah pernah diklaim dalam 24 jam. | Lakukan pengecekan ulang setelah pembeli menyelesaikan transfer di HP. |
