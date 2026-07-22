@@ -10,7 +10,7 @@ const BATAS_MAKSIMAL_LOG_MEMORI = 100;
 const DURASI_HAPUS_TRANSAKSI_LAMA_MS = 24 * 60 * 60 * 1000;
 const DURASI_KEDALUWARSA_QRIS_MS = 5 * 60 * 1000;
 const URL_API_GOJEK_TRANSAKSI = 'https://api.gojekapi.com/merchant-analytics/v2/merchants/transactions';
-const MERCHANT_ID_DEFAULT = 'G020877062';
+const MERCHANT_ID_DEFAULT = 'YOUR_MERCHANT_ID_DEFAULT_HERE';
 
 const daftarTransaksiYangSudahDiklaimMap = new Map();
 const daftarLogAktivitasMemoriArray = [];
