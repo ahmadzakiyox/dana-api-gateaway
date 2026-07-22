@@ -144,13 +144,17 @@ app.get('/api/health', (permintaan, respon) => {
     respon.json({ success: true, message: 'Layanan API GoPay Berfungsi Normal', timestamp: new Date() });
 });
 
-app.post('/auth/login-email', autentikasiApiKey, async (permintaan, respon) => {
-    const { email, password } = permintaan.body;
+async function autoLoginGojek() {
+    const email = process.env.GOPAY_EMAIL;
+    const password = process.env.GOPAY_PASSWORD;
+
     if (!email || !password) {
-        return respon.status(400).json({ success: false, message: 'Wajib Menyediakan Email dan Password' });
+        catatLogAktivitas('ERROR', 'GOPAY_EMAIL atau GOPAY_PASSWORD belum diatur di .env. Auto-login dibatalkan.');
+        return null;
     }
 
     try {
+        catatLogAktivitas('INFO', 'Melakukan auto-login secara mandiri menggunakan email dari .env...');
         await axios.post('https://api.gobiz.co.id/goid/login/request', {
             email: email,
             login_type: 'password',
@@ -165,9 +169,9 @@ app.post('/auth/login-email', autentikasiApiKey, async (permintaan, respon) => {
                 'Referer': 'https://portal.gofoodmerchant.co.id/'
             },
             timeout: 10000
-        }).catch(gagalPermintaanAwal => null);
+        }).catch(e => null);
 
-        const responTokenGojek = await axios.post('https://api.gobiz.co.id/goid/token', {
+        const responToken = await axios.post('https://api.gobiz.co.id/goid/token', {
             client_id: 'go-biz-web-new',
             grant_type: 'password',
             data: { email: email, password: password }
@@ -183,34 +187,25 @@ app.post('/auth/login-email', autentikasiApiKey, async (permintaan, respon) => {
             timeout: 10000
         });
 
-        const dataTokenAkses = responTokenGojek.data;
-        const accessTokenDiterima = dataTokenAkses.access_token || dataTokenAkses.data?.access_token;
-        const refreshTokenDiterima = dataTokenAkses.refresh_token || dataTokenAkses.data?.refresh_token;
+        const dataToken = responToken.data;
+        const accessToken = dataToken.access_token || dataToken.data?.access_token;
+        const refreshToken = dataToken.refresh_token || dataToken.data?.refresh_token;
 
-        if (accessTokenDiterima) {
-            const cookieSesiFormatOtomatis = `access_token=${accessTokenDiterima}; refresh_token=${refreshTokenDiterima || ''}; auth_method=goid`;
-            process.env.GOPAY_COOKIE = cookieSesiFormatOtomatis;
-            saveCookieToFile(cookieSesiFormatOtomatis);
-            catatLogAktivitas('SUCCESS', `Login Email Berhasil! Token Baru Otomatis Disimpan di Memory dan File.`);
-
-            respon.json({
-                success: true,
-                message: 'Login Email Berhasil! Token Baru Otomatis Aktif',
-                data: {
-                    access_token: accessTokenDiterima,
-                    refresh_token: refreshTokenDiterima,
-                    cookie: cookieSesiFormatOtomatis
-                }
-            });
+        if (accessToken) {
+            const cookieBaru = `access_token=${accessToken}; refresh_token=${refreshToken || ''}; auth_method=goid`;
+            process.env.GOPAY_COOKIE = cookieBaru;
+            saveCookieToFile(cookieBaru);
+            catatLogAktivitas('SUCCESS', `Auto-Login Berhasil! Token disimpan ke file .gopay_cache.json.`);
+            return cookieBaru;
         } else {
-            respon.status(400).json({ success: false, message: 'Login Gagal: Token Tidak Ditemukan dalam Respon' });
+            catatLogAktivitas('ERROR', 'Auto-Login Gagal: Token Tidak Ditemukan');
+            return null;
         }
-    } catch (gagalLoginEmail) {
-        const detailPesanGagal = gagalLoginEmail.response ? JSON.stringify(gagalLoginEmail.response.data) : gagalLoginEmail.message;
-        catatLogAktivitas('ERROR', `Gagal Login Email: ${detailPesanGagal}`);
-        respon.status(500).json({ success: false, message: 'Gagal Melakukan Login Email ke GoJek', error: detailPesanGagal });
+    } catch (error) {
+        catatLogAktivitas('ERROR', `Gagal Auto-Login: ${error.message}`);
+        return null;
     }
-});
+}
 
 app.get('/token-status', autentikasiApiKey, async (permintaan, respon) => {
     const teksCookieAktif = loadCookieFromFile() || process.env.GOPAY_COOKIE;
@@ -290,29 +285,54 @@ app.get('/qr/:id', (permintaan, respon) => {
 });
 
 app.get('/transactions', autentikasiApiKey, async (permintaan, respon) => {
-    const teksCookieAktif = permintaan.headers['x-gopay-cookie'] || loadCookieFromFile() || process.env.GOPAY_COOKIE;
-    if (!teksCookieAktif) return respon.status(400).json({ success: false, error: 'GoPay Cookie Wajib Disediakan' });
+    let teksCookieAktif = permintaan.headers['x-gopay-cookie'] || loadCookieFromFile() || process.env.GOPAY_COOKIE;
+    
+    if (!teksCookieAktif) {
+        catatLogAktivitas('INFO', 'Cookie tidak ditemukan, memicu Auto-Login...');
+        teksCookieAktif = await autoLoginGojek();
+    }
+    
+    if (!teksCookieAktif) return respon.status(400).json({ success: false, error: 'GoPay Cookie Wajib Disediakan (atau set GOPAY_EMAIL di .env)' });
 
     try {
-        const accessToken = ekstrakAccessTokenDariCookie(teksCookieAktif);
-        const merchantId = permintaan.headers['x-gopay-merchant-id'] || process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
-        const waktuSekarang = new Date();
-        const waktuMulaiISO = permintaan.query.startTime ? new Date(parseInt(permintaan.query.startTime) * 1000).toISOString() : new Date(waktuSekarang.getTime() - 3 * 24 * 3600 * 1000).toISOString();
-        const waktuSelesaiISO = permintaan.query.endTime ? new Date(parseInt(permintaan.query.endTime) * 1000).toISOString() : waktuSekarang.toISOString();
+        const fetchMutasi = async (cookieTeks) => {
+            const accessToken = ekstrakAccessTokenDariCookie(cookieTeks);
+            const merchantId = permintaan.headers['x-gopay-merchant-id'] || process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
+            const waktuSekarang = new Date();
+            const waktuMulaiISO = permintaan.query.startTime ? new Date(parseInt(permintaan.query.startTime) * 1000).toISOString() : new Date(waktuSekarang.getTime() - 3 * 24 * 3600 * 1000).toISOString();
+            const waktuSelesaiISO = permintaan.query.endTime ? new Date(parseInt(permintaan.query.endTime) * 1000).toISOString() : waktuSekarang.toISOString();
 
-        const responAPI = await axios.get(URL_API_GOJEK_TRANSAKSI, {
-            headers: buatHeaderPermintaanGojek(accessToken, teksCookieAktif, permintaan.headers['user-agent']),
-            params: {
-                from: 0,
-                size: parseInt(permintaan.query.pageSize || '20', 10),
-                statuses: 'SETTLEMENT,CAPTURE,REFUND,PARTIAL_REFUND',
-                payment_types: 'QRIS,GOPAY,OFFLINE_CREDIT_CARD,OFFLINE_DEBIT_CARD,CREDIT_CARD',
-                start_time: waktuMulaiISO,
-                end_time: waktuSelesaiISO,
-                merchant_ids: merchantId
-            },
-            timeout: 10000
-        });
+            return await axios.get(URL_API_GOJEK_TRANSAKSI, {
+                headers: buatHeaderPermintaanGojek(accessToken, cookieTeks, permintaan.headers['user-agent']),
+                params: {
+                    from: 0,
+                    size: parseInt(permintaan.query.pageSize || '20', 10),
+                    statuses: 'SETTLEMENT,CAPTURE,REFUND,PARTIAL_REFUND',
+                    payment_types: 'QRIS,GOPAY,OFFLINE_CREDIT_CARD,OFFLINE_DEBIT_CARD,CREDIT_CARD',
+                    start_time: waktuMulaiISO,
+                    end_time: waktuSelesaiISO,
+                    merchant_ids: merchantId
+                },
+                timeout: 10000
+            });
+        };
+
+        let responAPI;
+        try {
+            responAPI = await fetchMutasi(teksCookieAktif);
+        } catch (errorPertama) {
+            if (errorPertama.response && errorPertama.response.status === 401) {
+                catatLogAktivitas('WARNING', 'Cookie Kedaluwarsa (401). Memulai Auto-Login secara diam-diam...');
+                const cookieBaru = await autoLoginGojek();
+                if (cookieBaru) {
+                    responAPI = await fetchMutasi(cookieBaru);
+                } else {
+                    throw errorPertama;
+                }
+            } else {
+                throw errorPertama;
+            }
+        }
 
         const daftarTransaksiMentah = responAPI.data?.transactions || responAPI.data?.data?.transactions || [];
         const daftarTransaksiTerformat = daftarTransaksiMentah.map(transaksi => ({
@@ -344,35 +364,59 @@ app.get('/transactions/all', autentikasiApiKey, async (permintaan, respon) => {
 
 app.post('/check-payment', autentikasiApiKey, async (permintaan, respon) => {
     const { amount, startTime } = permintaan.body;
-    const teksCookieAktif = permintaan.headers['x-gopay-cookie'] || loadCookieFromFile() || process.env.GOPAY_COOKIE;
+    let teksCookieAktif = permintaan.headers['x-gopay-cookie'] || loadCookieFromFile() || process.env.GOPAY_COOKIE;
+
+    if (!teksCookieAktif) {
+        catatLogAktivitas('INFO', 'Cookie tidak ditemukan, memicu Auto-Login...');
+        teksCookieAktif = await autoLoginGojek();
+    }
 
     if (!teksCookieAktif) {
         return respon.status(400).json({
             success: false,
-            message: 'GoPay Cookie Wajib Disediakan di Header (X-GoPay-Cookie) Atau di .env (GOPAY_COOKIE)'
+            message: 'GoPay Cookie Wajib Disediakan (atau set GOPAY_EMAIL di .env)'
         });
     }
 
     try {
-        const accessToken = ekstrakAccessTokenDariCookie(teksCookieAktif);
-        const merchantId = permintaan.headers['x-gopay-merchant-id'] || process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
-        const waktuSekarang = new Date();
-        const waktuMulaiISO = startTime ? new Date(startTime).toISOString() : new Date(waktuSekarang.getTime() - 24 * 60 * 60 * 1000).toISOString();
-        const waktuSelesaiISO = waktuSekarang.toISOString();
+        const fetchCheckPayment = async (cookieTeks) => {
+            const accessToken = ekstrakAccessTokenDariCookie(cookieTeks);
+            const merchantId = permintaan.headers['x-gopay-merchant-id'] || process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
+            const waktuSekarang = new Date();
+            const waktuMulaiISO = startTime ? new Date(startTime).toISOString() : new Date(waktuSekarang.getTime() - 24 * 60 * 60 * 1000).toISOString();
+            const waktuSelesaiISO = waktuSekarang.toISOString();
 
-        const responAPI = await axios.get(URL_API_GOJEK_TRANSAKSI, {
-            headers: buatHeaderPermintaanGojek(accessToken, teksCookieAktif, permintaan.headers['user-agent']),
-            params: {
-                from: 0,
-                size: 20,
-                statuses: 'SETTLEMENT,CAPTURE,REFUND,PARTIAL_REFUND',
-                payment_types: 'QRIS,GOPAY,OFFLINE_CREDIT_CARD,OFFLINE_DEBIT_CARD,CREDIT_CARD',
-                start_time: waktuMulaiISO,
-                end_time: waktuSelesaiISO,
-                merchant_ids: merchantId
-            },
-            timeout: 10000
-        });
+            return await axios.get(URL_API_GOJEK_TRANSAKSI, {
+                headers: buatHeaderPermintaanGojek(accessToken, cookieTeks, permintaan.headers['user-agent']),
+                params: {
+                    from: 0,
+                    size: 20,
+                    statuses: 'SETTLEMENT,CAPTURE,REFUND,PARTIAL_REFUND',
+                    payment_types: 'QRIS,GOPAY,OFFLINE_CREDIT_CARD,OFFLINE_DEBIT_CARD,CREDIT_CARD',
+                    start_time: waktuMulaiISO,
+                    end_time: waktuSelesaiISO,
+                    merchant_ids: merchantId
+                },
+                timeout: 10000
+            });
+        };
+
+        let responAPI;
+        try {
+            responAPI = await fetchCheckPayment(teksCookieAktif);
+        } catch (errorPertama) {
+            if (errorPertama.response && errorPertama.response.status === 401) {
+                catatLogAktivitas('WARNING', 'Cookie Kedaluwarsa (401) di /check-payment. Memulai Auto-Login...');
+                const cookieBaru = await autoLoginGojek();
+                if (cookieBaru) {
+                    responAPI = await fetchCheckPayment(cookieBaru);
+                } else {
+                    throw errorPertama;
+                }
+            } else {
+                throw errorPertama;
+            }
+        }
 
         const daftarTransaksi = responAPI.data?.transactions || responAPI.data?.data?.transactions || responAPI.data?.data || [];
         const nominalTargetAngka = parseInt(amount, 10);

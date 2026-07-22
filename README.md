@@ -73,21 +73,16 @@ Jika dua pelanggan berbeda melakukan checkout dengan nominal yang sama (misal Rp
 
 ---
 
-## 🔑 Metode Autentikasi / Login
+## 🔑 Metode Autentikasi / Login (Autonomous)
 
-Sistem gateway ini menggunakan metode login otomatis menggunakan kredensial email & password merchant GoBiz Anda.
+Sistem gateway ini **100% mandiri (Autonomous)**. Anda tidak perlu lagi repot-repot memanggil endpoint login khusus.
 
-### Login Email & Password (`POST /auth/login-email`)
-Berguna untuk melakukan login otomatis dan mendapatkan sesi cookie segar dari GoJek. Pada VPS (Mode Stateful), ini hanya perlu dipanggil sekali dan sesi akan tersimpan di `.gopay_cache.json`.
-
-- **Endpoint**: `POST /auth/login-email`
-- **Request Body**:
-  ```json
-  {
-    "email": "merchant@toko.com",
-    "password": "PasswordMerchant123"
-  }
-  ```
+### Cara Kerja Autonomous Auto-Login:
+1. Pastikan Anda telah memasukkan `GOPAY_EMAIL` dan `GOPAY_PASSWORD` (kredensial login GoBiz) di file `.env`.
+2. Saat aplikasi Anda (atau Anda sendiri) meminta data mutasi melalui `GET /transactions` atau `POST /check-payment`, gateway akan mengecek status *cookie*.
+3. Jika *cookie* belum ada atau telah kedaluwarsa (GoJek membalas dengan error `401 Unauthorized`), gateway akan **secara diam-diam dan otomatis** melakukan login ulang ke GoJek.
+4. Gateway akan menyimpan sesi login yang baru ke dalam file `.gopay_cache.json` sehingga aman meskipun server VPS Anda di-*restart*.
+5. Setelah berhasil mendapatkan *cookie* baru, gateway langsung melanjutkan dan menyelesaikan proses pengecekan transaksi Anda tanpa mengirimkan pesan error.
 
 ## 📡 Dokumentasi API Endpoints Lengkap
 
@@ -104,10 +99,6 @@ Seluruh endpoint memerlukan Header `X-API-Key: <YOUR_API_KEY>` atau Query Param 
 | **GET** | `/qr/:id` | Tampilan Gambar QR Code di Browser | Public |
 | **GET** | `/transactions` | Ambil daftar mutasi transaksi terakhir | API Key |
 | **GET** | `/transactions/all` | Ambil seluruh mutasi transaksi bulan ini | API Key |
-| **POST** | `/update-token` | Update Cookie/Token secara realtime | API Key |
-| **POST** | `/auth/login-email` | Login otomatis via Email & Password | API Key |
-| **POST** | `/auth/request-otp` | Minta kode OTP ke No HP GoPay | API Key |
-| **POST** | `/auth/verify-otp` | Verifikasi OTP & aktifkan token baru | API Key |
 | **GET** | `/token-status` | Cek status kesehatan Cookie/Token GoPay | API Key |
 | **GET** | `/api/logs` | Monitoring 100 log aktivitas memori | API Key |
 
