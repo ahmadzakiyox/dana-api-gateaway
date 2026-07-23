@@ -8,14 +8,37 @@
   <img src="https://img.shields.io/badge/Deploy-VPS%20Only-orange" alt="VPS" />
 </p>
 
+<p align="center">
+  <a href="https://t.me/ahmadzakiyo">
+    <img src="https://img.shields.io/badge/Telegram-Chat%20Owner-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge" alt="Chat Owner" />
+  </a>
+  &nbsp;
+  <a href="https://t.me/nuxysproject">
+    <img src="https://img.shields.io/badge/Telegram-Channel%20Updates-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge" alt="Channel" />
+  </a>
+</p>
+
 API Gateway self-hosted berbasis Node.js untuk otomatisasi cek transaksi dan cetak QRIS dinamis dari akun **GoPay / GoFood Merchant** kamu.
 
+---
+
+> [!NOTE]
+> 💬 **HUBUNGI OWNER & BERGABUNG CHANNEL:**
+> - 👤 **Developer / Owner:** [@ahmadzakiyo](https://t.me/ahmadzakiyo)
+> - 📢 **Channel Update & Project:** [@nuxysproject](https://t.me/nuxysproject)
+
 > [!TIP]
-> **🆕 UPDATE TERBARU: Sistem Login OTP Terminal & Auto-Refresh Token**
-> Gateway ini sekarang menggunakan sistem autentikasi **OTP Terminal** (`node login.js`). Kamu tidak perlu lagi repot copy-paste cookie browser atau memasukkan password. Cukup masukkan nomor HP GoBiz & kode OTP 1 kali saja — token akan tersimpan dan **otomatis di-refresh oleh server di background** setiap 6 jam tanpa perlu login ulang!
+> 📣 **PENGUMUMAN & UPDATE TERBARU: Sistem Login OTP Terminal & Auto-Refresh Token**
+> Gateway ini sekarang menggunakan sistem autentikasi **OTP Terminal** (`node login.js`). Kamu tidak perlu lagi copy-paste cookie browser atau memasukkan password. Cukup masukkan nomor HP GoBiz & kode OTP 1 kali saja — token akan tersimpan dan **otomatis di-refresh oleh server di background** setiap 6 jam tanpa perlu login ulang!
+
+> [!CAUTION]
+> 🚨 **PERINGATAN WAJIB MENGGUNAKAN VPS / DEDICATED SERVER**
+> Gateway ini **wajib di-deploy di VPS** (Hostinger, DigitalOcean, Vultr, AWS EC2, Biznet, dll) yang memiliki penyimpanan permanen 24/7.
+> **DILARANG MENGGUNAKAN HOSTING SERVERLESS GRATISAN** (seperti Render Free, Vercel, Netlify) karena container akan *sleep* dan menghapus file sesi (`.GOPAY_SESI_JANGAN_DIHAPUS.json`), yang mengakibatkan sesi hangus dan harus login OTP ulang.
 
 > [!WARNING]
-> **Proyek Tidak Resmi:** Project ini tidak berafiliasi dengan PT GoTo / GoPay. Gunakan dengan bijak. Polling yang terlalu agresif bisa memicu pembatasan akun. Risiko ditanggung pengguna.
+> ⚠️ **DISCLAIMER PROYEK TIDAK RESMI:**
+> Project ini **tidak berafiliasi** dengan PT GoTo Gojek Tokopedia Tbk / GoPay. Gunakan dengan bijak. Polling yang terlalu agresif bisa memicu pembatasan akun. Risiko ditanggung pengguna sepenuhnya. Seluruh data berjalan 100% aman di server VPS Anda sendiri tanpa dikirim ke pihak ketiga.
 
 ---
 
@@ -304,16 +327,6 @@ gopay-gateway/
 ├── Dockerfile                        # Konfigurasi Docker
 └── docker-compose.yml                # Konfigurasi Docker Compose
 ```
-
----
-
-## ⚠️ Catatan Penting Wajib Diketahui
-
-> [!CAUTION]
-> **WAJIB MENGGUNAKAN VPS / DEDICATED SERVER**
-> Gateway ini memerlukan **penyimpanan permanen 24/7** untuk menjaga file `.GOPAY_SESI_JANGAN_DIHAPUS.json` dan menjalankan interval auto-refresh token.
->
-> **DILARANG MENGGUNAKAN HOSTING SERVERLESS GRATISAN** (seperti Render Free, Vercel, Netlify) karena container akan *sleep* dan menghapus file sesi, yang mengakibatkan token hangus dan Anda harus login OTP ulang.
 
 ---
 
