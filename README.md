@@ -276,3 +276,36 @@ gopay-gateway/
 > - Laptop/PC pribadi — server harus berjalan 24/7 agar token tidak kedaluwarsa
 >
 > File `.GOPAY_SESI_JANGAN_DIHAPUS.json` harus tersimpan **secara permanen** di disk VPS agar auto-refresh token bisa bekerja.
+
+---
+
+## 💬 Kontak & Komunitas
+
+Ada pertanyaan, error, atau mau diskusi? Hubungi langsung:
+
+<p align="center">
+  <a href="https://t.me/ahmadzakiyo">
+    <img src="https://img.shields.io/badge/Telegram-Chat%20Owner-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge" alt="Chat Owner" />
+  </a>
+  &nbsp;
+  <a href="https://t.me/nuxysproject">
+    <img src="https://img.shields.io/badge/Telegram-Channel%20Updates-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge" alt="Channel" />
+  </a>
+</p>
+
+- 👤 **Owner / Developer:** [@ahmadzakiyo](https://t.me/ahmadzakiyo)
+- 📢 **Channel (Update & Project):** [@nuxysproject](https://t.me/nuxysproject)
+
+---
+
+## ☕ Dukung Project Ini
+
+Kalau project ini bermanfaat buat kamu, traktir saya kopi ya! ☕
+
+Scan QRIS di bawah (GoPay / semua e-wallet):
+
+<p align="center">
+  <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=00020101021126580016ID.CO.QRIS.WWW01189360091400000000000215ID10200000000005204581253033605802ID5916MERCHANT GOPAY6007JAKARTA61051234562070703A016304C2E4" alt="QRIS Donasi ahmadzakiyo" width="200" />
+  <br/>
+  <sub>Nominal bebas — terima kasih banyak! 🙏</sub>
+</p>
