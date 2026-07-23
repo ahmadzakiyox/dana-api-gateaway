@@ -162,6 +162,13 @@ Header: X-API-Key: rahasia_api_key_anda_123
 **Respon Sukses:**
 ```json
 {
+### 1. Cek Status Sesi Token
+```http
+GET /token-status?api_key=rahasia_api_key_anda_123
+```
+**Respon Sukses:**
+```json
+{
   "success": true,
   "data": {
     "token_status": "valid",
@@ -171,15 +178,16 @@ Header: X-API-Key: rahasia_api_key_anda_123
 ```
 
 ### 2. Membuat QRIS Dinamis (Nominal Custom)
-```http
-POST /create-qris
-Header: X-API-Key: rahasia_api_key_anda_123
-Content-Type: application/json
+Bisa dipanggil via **GET (URL Simpel)** atau **POST (JSON Body)**:
 
-{
-  "amount": 25000
-}
-```
+- **Cara 1 (GET URL Simpel - Tanpa Header)**:
+  `http://vps-ip:3000/create-qris?amount=25000&api_key=rahasia_api_key_anda_123`
+
+- **Cara 2 (POST JSON Body)**:
+  `POST /create-qris`
+  Header: `X-API-Key: rahasia_api_key_anda_123`
+  Body: `{"amount": 25000}`
+
 **Respon Sukses:**
 ```json
 {
@@ -195,16 +203,16 @@ Content-Type: application/json
 ```
 
 ### 3. Cek Pembayaran Masuk (Check Payment)
-```http
-POST /check-payment
-Header: X-API-Key: rahasia_api_key_anda_123
-Content-Type: application/json
+Bisa dipanggil via **GET (URL Simpel)** atau **POST (JSON Body)**:
 
-{
-  "amount": 25000,
-  "startTime": "2026-07-23T23:30:00.000Z"
-}
-```
+- **Cara 1 (GET URL Simpel - Tinggal Buka di Browser)**:
+  `http://vps-ip:3000/check-payment?amount=25000&api_key=rahasia_api_key_anda_123`
+
+- **Cara 2 (POST JSON Body)**:
+  `POST /check-payment`
+  Header: `X-API-Key: rahasia_api_key_anda_123`
+  Body: `{"amount": 25000, "startTime": "2026-07-23T23:30:00.000Z"}`
+
 **Respon Sukses (Lunas):**
 ```json
 {
