@@ -4,6 +4,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
+const sessionManager = require('./sessionManager');
 
 const PORT_SERVER_DEFAULT = process.env.PORT || 3000;
 const BATAS_MAKSIMAL_LOG_MEMORI = 100;
@@ -11,7 +12,6 @@ const DURASI_HAPUS_TRANSAKSI_LAMA_MS = 24 * 60 * 60 * 1000;
 const DURASI_KEDALUWARSA_QRIS_MS = 5 * 60 * 1000;
 const URL_API_GOJEK_TRANSAKSI = 'https://api.gojekapi.com/merchant-analytics/v2/merchants/transactions';
 const MERCHANT_ID_DEFAULT = 'G020877062';
-
 const daftarTransaksiYangSudahDiklaimMap = new Map();
 const daftarLogAktivitasMemoriArray = [];
 const penyimpananPenyimpanGambarQRISMap = new Map();
@@ -58,6 +58,22 @@ function bersihkanTransaksiKadaluwarsa() {
     }
 }
 setInterval(bersihkanTransaksiKadaluwarsa, 60 * 60 * 1000);
+
+async function autoRefreshSessionPeriodik() {
+    try {
+        const session = sessionManager.loadSession();
+        if (session && session.refresh_token) {
+            if (sessionManager.isExpired(session)) {
+                catatLogAktivitas('INFO', 'Background Timer: Token GoBiz mendekati kadaluwarsa. Memulai auto-refresh...');
+                await sessionManager.refreshSession();
+            }
+        }
+    } catch (err) {
+        catatLogAktivitas('ERROR', `Gagal jalankan autoRefreshSessionPeriodik: ${err.message}`);
+    }
+}
+setInterval(autoRefreshSessionPeriodik, 6 * 60 * 60 * 1000);
+
 
 function hitungChecksumCRC16(teksPayloadTanpaCRC) {
     let nilaiCRC = 0xFFFF;
@@ -283,13 +299,24 @@ app.post('/auth/verify-otp', autentikasiApiKey, async (permintaan, respon) => {
 
         if (accessToken) {
             const cookieBaru = `access_token=${accessToken}; refresh_token=${refreshToken || ''}; auth_method=goid`;
+            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+            sessionManager.saveSession({
+                phone_number: process.env.GOPAY_PHONE || null,
+                access_token: accessToken,
+                refresh_token: refreshToken,
+                cookie: cookieBaru,
+                updated_at: new Date().toISOString(),
+                expires_at: expiresAt
+            });
+
             process.env.GOPAY_COOKIE = cookieBaru;
             saveCookieToFile(cookieBaru);
-            catatLogAktivitas('SUCCESS', `Verifikasi OTP Berhasil! Token baru disimpan ke file .gopay_cache.json.`);
+            catatLogAktivitas('SUCCESS', `Verifikasi OTP Berhasil! Token baru disimpan ke .GOPAY_SESI_JANGAN_DIHAPUS.json.`);
 
             respon.json({
                 success: true,
-                message: 'Verifikasi OTP Berhasil! Token Baru Aktif & Tersimpan di .gopay_cache.json',
+                message: 'Verifikasi OTP Berhasil! Token Baru Aktif & Tersimpan di .GOPAY_SESI_JANGAN_DIHAPUS.json',
                 data: {
                     access_token: accessToken,
                     refresh_token: refreshToken,
@@ -307,18 +334,17 @@ app.post('/auth/verify-otp', autentikasiApiKey, async (permintaan, respon) => {
 });
 
 app.get('/token-status', autentikasiApiKey, async (permintaan, respon) => {
-    const teksCookieAktif = loadCookieFromFile() || process.env.GOPAY_COOKIE;
-    if (!teksCookieAktif) {
-        return respon.json({ success: false, data: { token_status: 'invalid', message: 'Cookie Belum Dikonfigurasi' } });
+    const activeHeaders = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
+    if (!activeHeaders) {
+        return respon.json({ success: false, data: { token_status: 'invalid', message: 'Sesi Belum Dikonfigurasi. Silakan jalankan `node login.js` di terminal.' } });
     }
     try {
-        const accessToken = ekstrakAccessTokenDariCookie(teksCookieAktif);
         const merchantId = process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
         const waktuSekarang = new Date();
         const waktuSatuJamLaluISO = new Date(waktuSekarang.getTime() - 3600 * 1000).toISOString();
 
         await axios.get(URL_API_GOJEK_TRANSAKSI, {
-            headers: buatHeaderPermintaanGojek(accessToken, teksCookieAktif, permintaan.headers['user-agent']),
+            headers: activeHeaders,
             params: {
                 from: 0,
                 size: 1,
@@ -331,16 +357,16 @@ app.get('/token-status', autentikasiApiKey, async (permintaan, respon) => {
             timeout: 5000
         });
 
-        respon.json({ success: true, data: { token_status: 'valid', message: 'Token dan Cookie Aktif dan Berfungsi' } });
+        respon.json({ success: true, data: { token_status: 'valid', message: 'Token dan Sesi GoPay Merchant Aktif' } });
     } catch (gagalUjiToken) {
         respon.json({ success: false, data: { token_status: 'invalid', message: gagalUjiToken.message } });
     }
 });
 
-app.post('/create-qris', autentikasiApiKey, (permintaan, respon) => {
-    const { amount } = permintaan.body;
+app.all('/create-qris', autentikasiApiKey, (permintaan, respon) => {
+    const amount = permintaan.body?.amount || permintaan.query?.amount;
     if (!amount || isNaN(amount) || amount <= 0) {
-        return respon.status(400).json({ success: false, message: 'Nominal Pembayaran Tidak Valid' });
+        return respon.status(400).json({ success: false, message: 'Nominal Pembayaran Tidak Valid (Gunakan param ?amount=...)' });
     }
 
     const qrisStatisTemplate = process.env.QRIS_STATIC;
@@ -384,25 +410,25 @@ app.get('/qr/:id', (permintaan, respon) => {
 });
 
 app.get('/transactions', autentikasiApiKey, async (permintaan, respon) => {
-    let teksCookieAktif = permintaan.headers['x-gopay-cookie'] || loadCookieFromFile() || process.env.GOPAY_COOKIE;
-    
-    if (!teksCookieAktif) {
-        catatLogAktivitas('INFO', 'Cookie tidak ditemukan, memicu Auto-Login...');
-        teksCookieAktif = await autoLoginGojek();
+    let headersGojek = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
+
+    if (!headersGojek && process.env.GOPAY_EMAIL && process.env.GOPAY_PASSWORD) {
+        catatLogAktivitas('INFO', 'Sesi tidak ditemukan, memicu Auto-Login via Email...');
+        await autoLoginGojek();
+        headersGojek = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
     }
-    
-    if (!teksCookieAktif) return respon.status(400).json({ success: false, error: 'GoPay Cookie Wajib Disediakan (atau set GOPAY_EMAIL di .env)' });
+
+    if (!headersGojek) return respon.status(400).json({ success: false, error: 'Sesi GoPay Wajib Disediakan. Silakan jalankan `node login.js` di terminal.' });
 
     try {
-        const fetchMutasi = async (cookieTeks) => {
-            const accessToken = ekstrakAccessTokenDariCookie(cookieTeks);
+        const fetchMutasi = async (headersReq) => {
             const merchantId = permintaan.headers['x-gopay-merchant-id'] || process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
             const waktuSekarang = new Date();
             const waktuMulaiISO = permintaan.query.startTime ? new Date(parseInt(permintaan.query.startTime) * 1000).toISOString() : new Date(waktuSekarang.getTime() - 3 * 24 * 3600 * 1000).toISOString();
             const waktuSelesaiISO = permintaan.query.endTime ? new Date(parseInt(permintaan.query.endTime) * 1000).toISOString() : waktuSekarang.toISOString();
 
             return await axios.get(URL_API_GOJEK_TRANSAKSI, {
-                headers: buatHeaderPermintaanGojek(accessToken, cookieTeks, permintaan.headers['user-agent']),
+                headers: headersReq,
                 params: {
                     from: 0,
                     size: parseInt(permintaan.query.pageSize || '20', 10),
@@ -418,13 +444,14 @@ app.get('/transactions', autentikasiApiKey, async (permintaan, respon) => {
 
         let responAPI;
         try {
-            responAPI = await fetchMutasi(teksCookieAktif);
+            responAPI = await fetchMutasi(headersGojek);
         } catch (errorPertama) {
             if (errorPertama.response && errorPertama.response.status === 401) {
-                catatLogAktivitas('WARNING', 'Cookie Kedaluwarsa (401). Memulai Auto-Login secara diam-diam...');
-                const cookieBaru = await autoLoginGojek();
-                if (cookieBaru) {
-                    responAPI = await fetchMutasi(cookieBaru);
+                catatLogAktivitas('WARNING', 'Sesi Kedaluwarsa (401). Memulai Auto-Refresh Sesi...');
+                const sessionRefreshed = await sessionManager.refreshSession();
+                if (sessionRefreshed) {
+                    const newHeaders = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
+                    responAPI = await fetchMutasi(newHeaders);
                 } else {
                     throw errorPertama;
                 }
@@ -461,32 +488,33 @@ app.get('/transactions/all', autentikasiApiKey, async (permintaan, respon) => {
     return app._router.handle({ ...permintaan, url: '/transactions', method: 'GET' }, respon);
 });
 
-app.post('/check-payment', autentikasiApiKey, async (permintaan, respon) => {
-    const { amount, startTime } = permintaan.body;
-    let teksCookieAktif = permintaan.headers['x-gopay-cookie'] || loadCookieFromFile() || process.env.GOPAY_COOKIE;
+app.all('/check-payment', autentikasiApiKey, async (permintaan, respon) => {
+    const amount = permintaan.body?.amount || permintaan.query?.amount;
+    const startTime = permintaan.body?.startTime || permintaan.query?.startTime || permintaan.query?.start_time;
+    let headersGojek = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
 
-    if (!teksCookieAktif) {
-        catatLogAktivitas('INFO', 'Cookie tidak ditemukan, memicu Auto-Login...');
-        teksCookieAktif = await autoLoginGojek();
+    if (!headersGojek && process.env.GOPAY_EMAIL && process.env.GOPAY_PASSWORD) {
+        catatLogAktivitas('INFO', 'Sesi tidak ditemukan, memicu Auto-Login...');
+        await autoLoginGojek();
+        headersGojek = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
     }
 
-    if (!teksCookieAktif) {
+    if (!headersGojek) {
         return respon.status(400).json({
             success: false,
-            message: 'GoPay Cookie Wajib Disediakan (atau set GOPAY_EMAIL di .env)'
+            message: 'Sesi GoPay Wajib Disediakan. Silakan jalankan `node login.js` di terminal.'
         });
     }
 
     try {
-        const fetchCheckPayment = async (cookieTeks) => {
-            const accessToken = ekstrakAccessTokenDariCookie(cookieTeks);
+        const fetchCheckPayment = async (headersReq) => {
             const merchantId = permintaan.headers['x-gopay-merchant-id'] || process.env.GOPAY_MERCHANT_ID || MERCHANT_ID_DEFAULT;
             const waktuSekarang = new Date();
             const waktuMulaiISO = startTime ? new Date(startTime).toISOString() : new Date(waktuSekarang.getTime() - 24 * 60 * 60 * 1000).toISOString();
             const waktuSelesaiISO = waktuSekarang.toISOString();
 
             return await axios.get(URL_API_GOJEK_TRANSAKSI, {
-                headers: buatHeaderPermintaanGojek(accessToken, cookieTeks, permintaan.headers['user-agent']),
+                headers: headersReq,
                 params: {
                     from: 0,
                     size: 20,
@@ -502,13 +530,14 @@ app.post('/check-payment', autentikasiApiKey, async (permintaan, respon) => {
 
         let responAPI;
         try {
-            responAPI = await fetchCheckPayment(teksCookieAktif);
+            responAPI = await fetchCheckPayment(headersGojek);
         } catch (errorPertama) {
             if (errorPertama.response && errorPertama.response.status === 401) {
-                catatLogAktivitas('WARNING', 'Cookie Kedaluwarsa (401) di /check-payment. Memulai Auto-Login...');
-                const cookieBaru = await autoLoginGojek();
-                if (cookieBaru) {
-                    responAPI = await fetchCheckPayment(cookieBaru);
+                catatLogAktivitas('WARNING', 'Sesi Kedaluwarsa (401) di /check-payment. Memulai Auto-Refresh...');
+                const sessionRefreshed = await sessionManager.refreshSession();
+                if (sessionRefreshed) {
+                    const newHeaders = await sessionManager.getValidHeaders(permintaan.headers['user-agent']);
+                    responAPI = await fetchCheckPayment(newHeaders);
                 } else {
                     throw errorPertama;
                 }

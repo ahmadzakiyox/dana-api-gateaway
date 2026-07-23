@@ -14,6 +14,7 @@
     "express": "^4.18.3"
   },
   "devDependencies": {
+    "javascript-obfuscator": "^5.5.0",
     "nodemon": "^3.1.0"
   }
 }

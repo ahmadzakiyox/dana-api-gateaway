@@ -1,278 +1,311 @@
-# 🚀 GoPay Partner / Merchant API Gateway (Stateless Edition)
+# GoPay Merchant Gateway
 
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D%2020.0.0-blue.svg?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Express Framework](https://img.shields.io/badge/Express-4.18.3-lightgrey.svg?style=for-the-badge&logo=express&logoColor=white)](https://expressjs.com)
-[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-[![Architecture](https://img.shields.io/badge/Architecture-Stateful%20%26%20Stateless-brightgreen.svg?style=for-the-badge)](#)
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=nodedotjs&logoColor=white" alt="Node.js" />
+  <img src="https://img.shields.io/badge/Express-4.x-000000?logo=express&logoColor=white" alt="Express" />
+  <img src="https://img.shields.io/badge/Auth-OTP%20Based-00AED9" alt="OTP Auth" />
+  <img src="https://img.shields.io/badge/QRIS-EMVCo-red" alt="QRIS" />
+  <img src="https://img.shields.io/badge/Deploy-VPS%20Only-orange" alt="VPS" />
+</p>
 
-API Gateway berkinerja tinggi, ringan, dan fleksibel (mendukung **Stateful via VPS** maupun **Stateless via Cloud**) tanpa database permanen, untuk otomatisasi verifikasi mutasi transaksi GoPay Merchant, pencetakan QRIS Dinamis berstandar EMVCo (CRC16-CCITT) 5 Menit, serta pemantauan status transaksi realtime.
-
----
-
-> [!IMPORTANT]
-> ### ⚠️ Disclaimer: Unofficial API Gateway
-> Proyek ini adalah **Unofficial API Gateway** yang **TIDAK berafiliasi, TIDAK didukung, dan TIDAK disetujui secara resmi oleh PT. GoTo Gojek Tokopedia Tbk atau GoPay** dalam kapasitas apapun.
-> 
-> Gateway ini bekerja dengan cara membaca data transaksi dari **GoFood Merchant Portal / GoJek Analytics API** menggunakan sesi akun merchant Anda sendiri (Cookie / JWT Token).
-> 
-> **Kenapa Aman Digunakan?**
-> *   ✅ **Tidak ada credential yang keluar**: Token, Cookie, & API Key disimpan di server Anda sendiri di file `.env` dan **tidak pernah dikirim ke pihak ketiga manapun**.
-> *   ✅ **Read-Only & Non-Destruktif**: Gateway ini **hanya membaca** data mutasi transaksi dan tidak pernah melakukan transaksi keluar, penarikan dana, atau perubahan saldo.
-> *   ✅ **Zero Third-Party**: Semua lalu lintas data berjalan langsung dari server Anda ke endpoint resmi `api.gojekapi.com`.
-
----
-
-## 🧭 Diagram Alur Pengecekan Stateless (Client-Polled)
-
-Arsitektur ini didesain sangat aman dari deteksi pemblokiran (*rate-limit*) GoJek, karena gateway **hanya memanggil API GoJek secara pasif saat dipicu oleh halaman checkout aktif di toko Anda**. Saat toko sepi atau malam hari, jumlah panggilan API adalah **NOL (0)**.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Pelanggan
-    participant Toko as Toko Utama (Website/App)
-    participant Gateway as GoPay Gateway API
-    participant GoJek as GoJek Merchant Analytics API
-
-    Toko->>Gateway: POST /create-qris { amount: 50000 } (Auth: X-API-Key)
-    Note over Gateway: Membaca QRIS_STATIC & menyuntikkan nominal baru (Tag 54)<br/>Menghitung ulang CRC16-CCITT secara in-memory (5 Menit Expiry)
-    Gateway-->>Toko: Mengembalikan URL QR Redirect & data Expiry
-    Toko->>Pelanggan: Menampilkan halaman pembayaran & QR Code
-    Pelanggan->>GoJek: Memindai QR & menyelesaikan pembayaran di HP (GoPay/OVO/DANA/M-Banking)
-
-    loop Tiap 10-15 Detik (Hanya selama checkout aktif)
-        Toko->>Gateway: POST /check-payment { amount: 50000, startTime } (Auth: X-API-Key)
-        Gateway->>GoJek: GET /merchant-analytics/v2/merchants/transactions
-        GoJek-->>Gateway: Mengembalikan List Transaksi Masuk
-        alt Transaksi Ditemukan & Belum Diklaim (Paid: true)
-            Gateway->>Gateway: Catat transaction_id ke RAM Deduplication Map
-            Gateway-->>Toko: Mengembalikan status: {"paid": true, "transaction": { ... }}
-            Note over Toko: Tandai invoice LUNAS di database Toko Utama
-        else Transaksi Belum Ada / Sudah Diklaim (Paid: false)
-            Gateway-->>Toko: Mengembalikan status: {"paid": false}
-        end
-    end
-```
-
----
-
-## 🎯 Cara Kerja & Konsep Utama Sistem
+API Gateway self-hosted berbasis Node.js untuk otomatisasi cek transaksi dan cetak QRIS dinamis dari akun **GoPay / GoFood Merchant** kamu. Login cukup sekali via OTP terminal, token diperbarui otomatis di background.
 
 > [!WARNING]
-> ### 🚨 WAJIB MENGGUNAKAN VPS (Tidak Mendukung Serverless Cloud Gratis)
-> Sistem *Autonomous Auto-Login* gateway ini **WAJIB di-deploy di VPS (Virtual Private Server) atau Dedicated Server** yang memiliki penyimpanan permanen (*Persistent Storage*) seperti Hostinger, DigitalOcean, AWS EC2, Contabo, dsb.
-> 
-> **JANGAN menggunakan layanan cloud gratisan/ephemeral seperti Render.com, Vercel, Heroku, atau Railway!**
-> Layanan tersebut sering melakukan "Sleep" dan *restart* yang **menghapus semua file lokal** (termasuk `.gopay_cache.json`). Jika ini terjadi, gateway Anda akan melakukan *spam Auto-Login* ke server Gojek setiap kali server terbangun, yang sangat berisiko membuat akun GoBiz Anda terkena limitasi atau pemblokiran dari Gojek.
-
-### 1. Autonomous Caching & Zero-Database
-Sistem ini tidak memerlukan database besar (PostgreSQL/MySQL). Penyimpanan sesi disesuaikan secara mandiri oleh sistem:
-- Setiap kali *login* sukses, gateway akan otomatis membuat dan menyimpan token sesi ke dalam file `.gopay_cache.json` di direktori VPS Anda. 
-- Saat aplikasi Node.js atau PM2 di-restart, gateway tinggal membaca ulang file JSON tersebut tanpa perlu melakukan *login* ulang.
-
-### 2. In-Memory Dynamic QRIS EMVCo Generator (5 Menit Expiry)
-Proses pembuatan QRIS Dinamis **0% menembak API GoJek**. Server `server.js` membaca QRIS Statis stiker Anda (`QRIS_STATIC`), menyuntikkan Tag Nominal `54`, dan menghitung ulang kode checksum 4-karakter **CRC16-CCITT** secara in-memory dalam hitungan milidetik.
-- **Masa Aktif**: Diberi batas waktu 5 menit (`expires_in: "5 menit"`).
-- **Public Image Redirect**: Menghasilkan link publik `GET /qr/:id` yang langsung mengarahkan ke gambar QR Code siap tampil di web toko.
-
-### 3. In-Memory Transaction Deduplication (Anti Double-Claim)
-Jika dua pelanggan berbeda melakukan checkout dengan nominal yang sama (misal Rp 50.000) pada waktu bersamaan, sistem secara otomatis mencatat `transaction_id` yang sukses divalidasi ke dalam *Map* memori RAM. Jika ada klaim transaksi ulang menggunakan ID yang sama dalam 24 jam, gateway akan menolaknya (`paid: false`).
+> **Proyek Tidak Resmi:** Project ini tidak berafiliasi dengan PT GoTo / GoPay. Gunakan dengan bijak. Polling yang terlalu agresif bisa memicu pembatasan akun. Risiko ditanggung pengguna.
 
 ---
 
-## 🔑 Metode Autentikasi / Login (Autonomous)
+## Fitur Utama
 
-Sistem gateway ini **100% mandiri (Autonomous)**. Anda tidak perlu lagi repot-repot memanggil endpoint login khusus.
-
-### Cara Kerja Autonomous Auto-Login:
-1. Pastikan Anda telah memasukkan `GOPAY_EMAIL` dan `GOPAY_PASSWORD` (kredensial login GoBiz) di file `.env`.
-2. Saat aplikasi Anda (atau Anda sendiri) meminta data mutasi melalui `GET /transactions` atau `POST /check-payment`, gateway akan mengecek status *cookie*.
-3. Jika *cookie* belum ada atau telah kedaluwarsa (GoJek membalas dengan error `401 Unauthorized`), gateway akan **secara diam-diam dan otomatis** melakukan login ulang ke GoJek.
-4. Gateway akan menyimpan sesi login yang baru ke dalam file `.gopay_cache.json` sehingga aman meskipun server VPS Anda di-*restart*.
-5. Setelah berhasil mendapatkan *cookie* baru, gateway langsung melanjutkan dan menyelesaikan proses pengecekan transaksi Anda tanpa mengirimkan pesan error.
-
-## 📡 Dokumentasi API Endpoints Lengkap
-
-Seluruh endpoint memerlukan Header `X-API-Key: <YOUR_API_KEY>` atau Query Param `?api_key=<YOUR_API_KEY>`.
-
-### 📋 Tabel Ringkasan Endpoints API
-
-| Method | Endpoint | Fungsi | Autentikasi |
-| :--- | :--- | :--- | :--- |
-| **GET** | `/` | Status root server | Public |
-| **GET** | `/health` / `/api/health` | Health Check server | Public |
-| **POST** | `/check-payment` | Verifikasi lunas nominal transaksi | API Key |
-| **POST** | `/create-qris` | Generate QRIS Dinamis (5 Menit Expiry) + Redirect | API Key |
-| **GET** | `/qr/:id` | Tampilan Gambar QR Code di Browser | Public |
-| **GET** | `/transactions` | Ambil daftar mutasi transaksi terakhir | API Key |
-| **GET** | `/transactions/all` | Ambil seluruh mutasi transaksi bulan ini | API Key |
-| **GET** | `/token-status` | Cek status kesehatan Cookie/Token GoPay | API Key |
-| **GET** | `/api/logs` | Monitoring 100 log aktivitas memori | API Key |
+- 🔐 **Login OTP Terminal** — Login via `node login.js` menggunakan nomor HP GoBiz, tanpa email/password
+- 🔄 **Auto-Refresh Token** — Token diperbarui otomatis setiap 6 jam di background. Login cukup **1 kali**
+- 🧾 **QRIS Dinamis (EMVCo)** — Generate QRIS nominal custom dari QRIS statis merchant, dihitung lokal (CRC16)
+- ✅ **Cek Pembayaran** — Cocokkan nominal + waktu transaksi secara real-time, anti duplikat klaim
+- 📋 **Riwayat Mutasi** — Ambil transaksi QRIS/GoPay/Kartu dalam rentang waktu tertentu
+- 🔒 **Proteksi API Key** — Semua endpoint dilindungi `API_KEY` milik kamu sendiri
+- 🐳 **Docker Ready** — Bisa di-deploy pakai `docker compose up -d`
 
 ---
 
-### 1. Verifikasi Pembayaran (`POST /check-payment`)
-- **Headers**: `X-API-Key: supersecretkey123`, `Content-Type: application/json`
-- **Body**:
-  ```json
-  {
-    "amount": 1100,
-    "startTime": "2026-07-21T00:00:00.000Z"
-  }
-  ```
-- **Respon Sukses (Paid: true)**:
-  ```json
-  {
-    "success": true,
-    "paid": true,
-    "transaction": {
-      "transaction_id": "019f84f1-9a30-7000-8cd6-7e8fb377398e",
-      "order_id": "QRIS-0120260721135054iD7q2sbZcJID",
-      "amount": 1100,
-      "payer_issuer": "SEABANK",
-      "payment_type": "QRIS",
-      "transaction_time": "2026-07-21T20:50:54+07:00"
-    }
-  }
-  ```
+## Persyaratan
+
+- **VPS / Dedicated Server** dengan Node.js ≥ 18 (wajib, lihat [Catatan VPS](#-catatan-penting-wajib-vps))
+- Akun GoBiz / GoFood Merchant aktif yang terdaftar dengan nomor HP
+- QRIS statis dari aplikasi GoBiz (untuk fitur generate QRIS dinamis)
 
 ---
 
-### 2. Generate Dynamic QRIS (`POST /create-qris`)
-- **Body**:
-  ```json
-  {
-    "amount": 50000
-  }
-  ```
-- **Respon**:
-  ```json
-  {
-    "success": true,
-    "data": {
-      "qris_url": "http://localhost:3000/qr/a1b2c3d4",
-      "qris_code": "0002010102112658...540550000...6304XXXX",
-      "amount": 50000,
-      "expires_at": "2026-07-21T22:00:00.000Z",
-      "expires_in": "5 menit"
-    }
-  }
-  ```
+## Instalasi & Setup
 
----
+### 1. Clone & Install
 
-## 🛠️ PANDUAN SELF-HOSTING & DEPLOYMENT LENGKAP
-
-Anda dapat mendisematkan `gopay-gateway` di server Anda sendiri menggunakan beberapa metode berikut:
-
-### METODE A: Self-Host di Server VPS (Ubuntu / Debian dengan PM2)
-
-#### 1. Install Node.js & PM2
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install -y -g pm2
-```
-
-#### 2. Clone & Setup Proyek
-```bash
-git clone https://github.com/ahmadzakiyox/dana-api-gateaway.git
+git clone <url-repo-ini>
 cd gopay-gateway
 npm install
+```
+
+### 2. Konfigurasi `.env`
+
+```bash
 cp .env.example .env
 ```
-*(Sesuaikan isi `.env` Anda dengan `GOPAY_COOKIE`, `GOPAY_MERCHANT_ID`, dan `API_KEY`)*.
 
-#### 3. Jalankan via PM2 (Auto-Restart pada Background)
+Buka `.env` dan isi sesuai kebutuhan:
+
+```env
+PORT=3000
+API_KEY=YOUR_API_KEY_HERE
+QRIS_STATIC=YOUR_QRIS_STATIC_HERE
+GOPAY_MERCHANT_ID=YOUR_MERCHANT_ID_HERE
+```
+
+> **Catatan:** `GOPAY_MERCHANT_ID` akan otomatis terisi setelah kamu menjalankan `node login.js`.
+
+### 3. Login OTP (Cukup 1 Kali)
+
 ```bash
+node login.js
+```
+
+Program akan meminta nomor HP GoBiz kamu, mengirim OTP via SMS/WA, lalu menyimpan sesi ke file `.GOPAY_SESI_JANGAN_DIHAPUS.json`.
+
+```
+====================================================
+   GOPAY MERCHANT / GOFOOD MERCHANT LOGIN OTP CLI
+====================================================
+
+>> Masukkan Nomor HP GoBiz/GoFood Merchant: 085119772671
+[*] Mengirim permintaan OTP...
+[+] Kode OTP (4 digit) berhasil dikirim via SMS!
+>> Masukkan Kode OTP: 1234
+[SUCCESS] LOGIN BERHASIL & SESI TERSIMPAN!
+```
+
+> [!IMPORTANT]
+> **Jangan hapus** file `.GOPAY_SESI_JANGAN_DIHAPUS.json`. File ini berisi token aktif yang diperlukan gateway untuk berjalan. Jika terhapus, kamu harus login ulang.
+
+### 4. Jalankan Server
+
+```bash
+# Development (auto-restart saat ada perubahan)
+npm run dev
+
+# Production menggunakan PM2
 pm2 start server.js --name gopay-gateway
 pm2 save
 pm2 startup
 ```
 
+Server berjalan di `http://localhost:3000` (atau port yang kamu atur di `.env`).
+
 ---
 
-### METODE B: Self-Host Menggunakan Docker & Docker Compose
+## API Reference
 
-Proyek ini telah dilengkapi dengan `Dockerfile` dan `docker-compose.yml`.
+Semua endpoint memerlukan autentikasi. Bisa lewat **Header** atau **Query Parameter**:
 
-#### 1. Jalankan Container Docker:
-```bash
-docker-compose up -d --build
+```
+Header   : X-Api-Key: <API_KEY>
+Query    : ?api_key=<API_KEY>
 ```
 
-#### 2. Cek Log Container:
-```bash
-docker-compose logs -f
+---
+
+### `GET /token-status` — Cek Status Sesi
+
+Memverifikasi apakah token aktif dengan mencoba hit API GoPay secara langsung.
+
+```http
+GET http://vps-ip:3000/token-status?api_key=RAHASIA
 ```
 
-
-
-## 💻 Panduan Integrasi ke Website Toko Utama
-
-Berikut adalah contoh alur integrasi checkout pembayaran GoPay / QRIS pada aplikasi website Anda:
-
-```javascript
-// Contoh Javascript Frontend Checkout
-async function prosesPembayaranCheckout(nominalTagihan) {
-  // 1. Panggil Gateway untuk buat QRIS Dinamis (5 Menit)
-  const qrisRespon = await fetch('http://localhost:3000/create-qris', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': 'supersecretkey123'
-    },
-    body: JSON.stringify({ amount: nominalTagihan })
-  }).then(r => r.json());
-
-  if (!qrisRespon.success) return alert('Gagal membuat QRIS');
-
-  // 2. Tampilkan Gambar QR Code di Layar Pembeli
-  document.getElementById('qrImage').src = qrisRespon.data.qris_url;
-
-  // 3. Polling Pengecekan Status Pembayaran Setiap 10 Detik
-  const startTimeISO = new Date().toISOString();
-  const timerPolling = setInterval(async () => {
-    const statusRespon = await fetch('http://localhost:3000/check-payment', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': 'supersecretkey123'
-      },
-      body: JSON.stringify({ amount: nominalTagihan, startTime: startTimeISO })
-    }).then(r => r.json());
-
-    if (statusRespon.paid) {
-      clearInterval(timerPolling);
-      alert('✅ Pembayaran Berhasil Diterima!');
-      window.location.href = '/checkout/sukses';
-    }
-  }, 10000);
+**Respon:**
+```json
+{
+  "success": true,
+  "data": {
+    "token_status": "valid",
+    "message": "Token dan Sesi GoPay Merchant Aktif"
+  }
 }
 ```
 
 ---
 
-## ❓ Troubleshooting & Penanganan Kode Error
+### `GET /create-qris` — Buat QRIS Dinamis
 
-| Status Error | Penyebab | Solusi |
-| :--- | :--- | :--- |
-| `401 Unauthorized: Invalid API Key` | API Key yang dikirim tidak sesuai dengan `API_KEY` di `.env`. | Periksa kembali header `X-API-Key` atau query param `?api_key=`. |
-| `401 Unauthorized (GoJek API)` | Cookie / Token GoPay telah kedaluwarsa atau di-*force logout*. | Gateway akan otomatis melakukan login ulang dari Email & Password di `.env`. Jika masih gagal, pastikan `GOPAY_EMAIL` dan `GOPAY_PASSWORD` benar. |
-| `410 Gone (QR expired)` | Link gambar QR Code telah melewati batas waktu 5 menit. | Buat QRIS baru via `POST /create-qris`. |
-| `paid: false` | Pembayaran belum masuk atau transaksi sudah pernah diklaim dalam 24 jam. | Lakukan pengecekan ulang setelah pembeli menyelesaikan transfer di HP. |
+Membuat QRIS dengan nominal tertentu secara lokal dari QRIS statis. Tidak memanggil API GoJek. QR aktif selama **5 menit**.
+
+```http
+GET http://vps-ip:3000/create-qris?amount=25000&api_key=RAHASIA
+```
+
+| Parameter | Tipe | Keterangan |
+|---|---|---|
+| `amount` | `number` | Nominal dalam Rupiah (wajib) |
+| `api_key` | `string` | API Key kamu |
+
+**Respon:**
+```json
+{
+  "success": true,
+  "data": {
+    "qris_url": "http://vps-ip:3000/qr/abc123xyz",
+    "qris_code": "00020101021126...",
+    "amount": 25000,
+    "expires_at": "2026-07-23T17:00:00.000Z",
+    "expires_in": "5 menit"
+  }
+}
+```
+
+> `qris_url` adalah link gambar QR yang langsung bisa di-embed ke halaman web atau WhatsApp.
 
 ---
 
-## ☕ Dukungan & Donasi
+### `GET /check-payment` — Cek Pembayaran Masuk
 
-Proyek ini dibuat untuk membantu mempermudah proses pembayaran untuk teman-teman developer dan merchant. Jika proyek **GoPay API Gateway** ini bermanfaat dan membantu bisnis Anda, Anda bisa mendukung pengembangan proyek ini melalui donasi!
+Mencari transaksi yang cocok berdasarkan **nominal + waktu**. Setiap transaksi hanya bisa diklaim **1 kali** (anti double-claim).
 
-**Silakan scan QRIS di bawah ini untuk berdonasi:**
+```http
+GET http://vps-ip:3000/check-payment?amount=25000&api_key=RAHASIA
+```
+
+| Parameter | Tipe | Default | Keterangan |
+|---|---|---|---|
+| `amount` | `number` | — | Nominal yang dicari (wajib) |
+| `startTime` | `string` | 24 jam lalu | ISO timestamp awal pencarian |
+| `api_key` | `string` | — | API Key kamu |
+
+**Respon (Lunas):**
+```json
+{
+  "success": true,
+  "paid": true,
+  "transaction": {
+    "transaction_id": "TRX-12345",
+    "order_id": "GOPAY-1234567890",
+    "amount": 25000,
+    "payer_issuer": "GoPay / BCA",
+    "payment_type": "QRIS",
+    "transaction_time": "2026-07-23T17:05:12.000Z"
+  }
+}
+```
+
+**Respon (Belum Lunas):**
+```json
+{ "success": true, "paid": false, "message": "Pembayaran Belum Ditemukan Atau Sudah Pernah Diklaim" }
+```
+
+---
+
+### `GET /transactions` — Riwayat Mutasi
+
+Mengambil daftar transaksi QRIS/GoPay/Kartu dalam rentang waktu tertentu.
+
+```http
+GET http://vps-ip:3000/transactions?api_key=RAHASIA
+```
+
+| Parameter | Tipe | Default | Keterangan |
+|---|---|---|---|
+| `startTime` | `unix timestamp` | 3 hari lalu | Waktu awal (dalam detik) |
+| `endTime` | `unix timestamp` | Sekarang | Waktu akhir (dalam detik) |
+| `pageSize` | `number` | `20` | Jumlah transaksi yang diambil |
+
+---
+
+### `GET /api/logs` — Log Aktivitas Server
+
+```http
+GET http://vps-ip:3000/api/logs?api_key=RAHASIA
+```
+
+Menampilkan 100 log aktivitas server terakhir (disimpan di memori).
+
+---
+
+## Cara Request: GET vs POST
+
+Semua endpoint utama mendukung **dua cara request** — fleksibel untuk berbagai kebutuhan integrasi:
+
+| Cara | Contoh |
+|---|---|
+| **GET (URL langsung)** | `?amount=25000&api_key=RAHASIA` |
+| **POST (JSON Body)** | `{"amount": 25000}` + Header `X-Api-Key` |
+
+Cocok untuk integrasi dari **PHP, Python, WordPress, platform toko online**, atau panggilan langsung dari browser.
+
+---
+
+## Deploy via Docker
+
+```bash
+docker compose up -d
+```
+
+Pastikan file `.env` dan `.GOPAY_SESI_JANGAN_DIHAPUS.json` ada di direktori yang sama sebelum menjalankan Docker.
+
+---
+
+## Struktur Project
+
+```
+gopay-gateway/
+├── server.js                         # Express server & semua endpoint API
+├── login.js                          # CLI login OTP interaktif
+├── sessionManager.js                 # Manajemen sesi, auto-refresh token
+├── .env                              # Konfigurasi rahasia (jangan di-commit!)
+├── .env.example                      # Template konfigurasi
+├── .GOPAY_SESI_JANGAN_DIHAPUS.json   # File sesi aktif (otomatis dibuat)
+├── Dockerfile
+└── docker-compose.yml
+```
+
+---
+
+## ⚠️ Catatan Penting: Wajib VPS
+
+> [!CAUTION]
+> Gateway ini **wajib di-deploy di VPS atau Dedicated Server** (Hostinger, DigitalOcean, Vultr, AWS EC2, Biznet, dll).
+>
+> **Jangan gunakan:**
+> - Hosting gratis seperti Render free, Railway free, Vercel, Netlify — container akan *sleep* dan menghapus file sesi
+> - Laptop/PC pribadi — server harus berjalan 24/7 agar token tidak kedaluwarsa
+>
+> File `.GOPAY_SESI_JANGAN_DIHAPUS.json` harus tersimpan **secara permanen** di disk VPS agar auto-refresh token bisa bekerja.
+
+---
+
+## 💬 Kontak & Komunitas
+
+Ada pertanyaan, error, atau mau diskusi? Hubungi langsung:
 
 <p align="center">
-  <img src="https://github.com/ahmadzakiyox/DB/blob/a3aa4e5fb31e5f6f66b686b8629b233d440b717a/6269360055874426106_121.jpg?raw=true" alt="QRIS Donasi" width="300"/>
+  <a href="https://t.me/ahmadzakiyo">
+    <img src="https://img.shields.io/badge/Telegram-Chat%20Owner-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge" alt="Chat Owner" />
+  </a>
+  &nbsp;
+  <a href="https://t.me/nuxysproject">
+    <img src="https://img.shields.io/badge/Telegram-Channel%20Updates-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge" alt="Channel" />
+  </a>
 </p>
 
-💡 **Punya ide fitur baru, pertanyaan, atau butuh bantuan integrasi?** 
-Jangan ragu untuk menghubungi saya di Telegram: **[@ahmadzaki_yo](https://t.me/ahmadzaki_yo)**
+- 👤 **Owner / Developer:** [@ahmadzakiyo](https://t.me/ahmadzakiyo)
+- 📢 **Channel (Update & Project):** [@nuxysproject](https://t.me/nuxysproject)
+
+---
+
+## ☕ Dukung Project Ini
+
+Kalau project ini bermanfaat buat kamu, traktir saya kopi ya! ☕
+
+Scan QRIS di bawah (GoPay / semua e-wallet):
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ahmadzakiyox/DB/main/6269360055874426106_121.jpg" alt="QRIS Donasi ahmadzakiyo" width="250" />
+  <br/>
+  <sub>Nominal bebas — terima kasih banyak! 🙏</sub>
+</p>
